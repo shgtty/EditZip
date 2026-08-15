@@ -5,9 +5,45 @@ import tempfile
 import subprocess
 import csv
 import io
+import json
 from collections import defaultdict
 from tqdm import tqdm
 from send2trash import send2trash
+
+CONFIG_FILE_NAME = "config.json"
+DEFAULT_CONFIG = {
+    "exclude_keywords": [
+        "__MACOSX",
+        ".DS_Store",
+        "Thumbs.db",
+        "desktop.ini"
+    ]
+}
+
+
+def load_config():
+    """スクリプトと同階層の config.json を読み込み、なければデフォルトを作成して返します。"""
+    config_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(config_dir, CONFIG_FILE_NAME)
+
+    if not os.path.exists(config_path):
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+            return DEFAULT_CONFIG
+        except Exception as e:
+            print(f"警告: 設定ファイルの作成に失敗しました: {e}")
+            return DEFAULT_CONFIG
+
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            if not isinstance(config, dict):
+                return DEFAULT_CONFIG
+            return config
+    except Exception as e:
+        print(f"警告: 設定ファイル '{config_path}' の読み込みに失敗しました。デフォルト設定を使用します: {e}")
+        return DEFAULT_CONFIG
 
 
 def format_size(size_bytes):
@@ -22,6 +58,12 @@ def format_size(size_bytes):
 
 
 def edit_zips_interactive(zip_paths):
+    # 設定ファイルの読み込み
+    config = load_config()
+    exclude_keywords = [
+        kw.strip().lower() for kw in config.get("exclude_keywords", []) if isinstance(kw, str) and kw.strip()
+    ]
+
     # 有効なパスのみ抽出
     valid_zip_paths = []
     for path in zip_paths:
@@ -43,7 +85,8 @@ def edit_zips_interactive(zip_paths):
 
         writer.writerow(["# ZIPファイル一括構成定義CSV"])
         writer.writerow(["# フォーマット: ZIPファイルパス, 元のファイルパス, 変更後のファイルパス, ファイルサイズ"])
-        writer.writerow(["# 3列目(変更後のファイルパス)を書き換えるとリネームされます。行を削除するとそのファイルは除外されます。"])
+        writer.writerow(["# 3列目(変更後のファイルパス)を書き換えるとリネームされます。"])
+        writer.writerow(["# 行を削除するか先頭に '#' を付けると除外されます（設定ファイルのキーワードに該当するファイルは事前にコメントアウトされています）。"])
         writer.writerow(["# 編集完了後、保存してテキストエディタを閉じてください。"])
         writer.writerow([])
         writer.writerow(["zip_path", "original_path", "new_path", "file_size"])
@@ -56,7 +99,12 @@ def edit_zips_interactive(zip_paths):
                         name = info.filename
                         original_mappings[z_path].append((name, name))
                         size_str = format_size(info.file_size)
-                        writer.writerow([z_path, name, name, size_str])
+
+                        # 除外キーワードが含まれる場合は行頭に '#' を付与してコメントアウト状態で出力
+                        is_excluded = any(kw in name.lower() for kw in exclude_keywords)
+                        row_zip_path = f"#{z_path}" if is_excluded else z_path
+
+                        writer.writerow([row_zip_path, name, name, size_str])
             except Exception as e:
                 print(f"エラー: '{z_path}' の読み込み中に問題が発生しました: {e}")
 

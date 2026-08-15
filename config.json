@@ -1,0 +1,8 @@
+{
+  "exclude_keywords": [
+    "__MACOSX",
+    ".DS_Store",
+    "Thumbs.db",
+    "desktop.ini"
+  ]
+}
