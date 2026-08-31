@@ -86,9 +86,10 @@ C:\archives\sample.zip, old_dir/file.txt, old_dir/file.txt, 1.2 KB
 # ZIP Directory Rename Mode
 # Format: zip_path, original_dir, new_dir
 zip_path, original_dir, new_dir
-C:\archives\sample.zip, old_dir/, new_dir/
-C:\archives\sample.zip, old_dir/sub_folder/, old_dir/sub_folder/
+C:\archives\sample.zip, old_dir, new_dir
+C:\archives\sample.zip, old_dir/sub_folder, old_dir/sub_folder
 ```
 - **To Rename Directory**: Change the 3rd column (`new_dir`). All files under that folder will be automatically renamed.
+- **To Flatten to Root**: Clear the 3rd column (leave it empty).
 - **To Keep Untouched**: Leave as is, delete the line, or add `#` at the start of the line.
 

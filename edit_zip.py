@@ -97,6 +97,9 @@ def rebuild_zip_file(z_path, mapping):
             src_entries = set(src_zf.namelist())
             with zipfile.ZipFile(mem_zip, 'w', compression=zipfile.ZIP_DEFLATED) as dst_zf:
                 for old_name, new_name in tqdm(mapping, desc=f"[{zip_filename}] 圧縮中", unit="files"):
+                    # 空文字のエントリ（ディレクトリ階層削除時など）はスキップ
+                    if not new_name or not new_name.strip('/'):
+                        continue
                     if old_name in src_entries:
                         data = src_zf.read(old_name)
                         dst_zf.writestr(new_name, data)
@@ -117,21 +120,21 @@ def rebuild_zip_file(z_path, mapping):
 
 
 def extract_directories(namelist):
-    """ZIP内の全エントリからユニークなディレクトリ一覧を抽出して返します。"""
+    """ZIP内の全エントリからユニークなディレクトリ一覧（末尾スラッシュなし）を抽出して返します。"""
     dirs = set()
     for name in namelist:
-        parts = name.strip('/').split('/')
+        parts = [p for p in name.split('/') if p]
         if name.endswith('/'):
-            curr = ""
+            curr = []
             for p in parts:
-                curr += p + "/"
-                dirs.add(curr)
+                curr.append(p)
+                dirs.add("/".join(curr))
         else:
             if len(parts) > 1:
-                curr = ""
+                curr = []
                 for p in parts[:-1]:
-                    curr += p + "/"
-                    dirs.add(curr)
+                    curr.append(p)
+                    dirs.add("/".join(curr))
     # 階層の浅い順 -> アルファベット順でソート
     return sorted(dirs, key=lambda d: (d.count('/'), d))
 
@@ -157,6 +160,7 @@ def edit_zips_dir_mode(zip_paths):
         writer.writerow(["# ZIPディレクトリ名変更モード"])
         writer.writerow(["# フォーマット: ZIPファイルパス, 元のディレクトリ名, 変更後のディレクトリ名"])
         writer.writerow(["# 3列目(変更後のディレクトリ名)を書き換えると、そのディレクトリ配下のすべてのファイル/フォルダが一括リネームされます。"])
+        writer.writerow(["# 3列目を空にすると、ディレクトリ階層が削除され配下のファイルがルート直下に移動します。"])
         writer.writerow(["# 行を削除するか先頭に '#' を付けると変更されません。"])
         writer.writerow(["# 編集完了後、保存してテキストエディタを閉じてください。"])
         writer.writerow([])
@@ -231,11 +235,16 @@ def edit_zips_dir_mode(zip_paths):
         # 変更されたルール (old_dir != new_dir) のみを抽出
         changed_rules = []
         for old_d, new_d in dir_rules:
-            # 末尾スラッシュの正規化（空文字以外でスラッシュがない場合付与）
-            norm_old_d = old_d if old_d.endswith('/') else old_d + '/'
-            norm_new_d = new_d
-            if norm_new_d and not norm_new_d.endswith('/'):
-                norm_new_d += '/'
+            clean_old = old_d.strip().strip('/')
+            clean_new = new_d.strip().strip('/')
+
+            if not clean_old:
+                continue
+
+            # 内部のパス一致判定用に末尾スラッシュを付与（clean_new が空の場合はルート直下に移動するため空文字のまま）
+            norm_old_d = clean_old + '/'
+            norm_new_d = (clean_new + '/') if clean_new else ""
+
             if norm_old_d != norm_new_d:
                 changed_rules.append((norm_old_d, norm_new_d))
 
