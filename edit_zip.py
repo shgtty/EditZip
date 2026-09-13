@@ -6,6 +6,7 @@ import subprocess
 import csv
 import io
 import json
+import copy
 from collections import defaultdict
 from tqdm import tqdm
 from send2trash import send2trash
@@ -102,7 +103,10 @@ def rebuild_zip_file(z_path, mapping):
                         continue
                     if old_name in src_entries:
                         data = src_zf.read(old_name)
-                        dst_zf.writestr(new_name, data)
+                        src_info = src_zf.getinfo(old_name)
+                        new_info = copy.copy(src_info)
+                        new_info.filename = new_name
+                        dst_zf.writestr(new_info, data)
                     else:
                         tqdm.write(f"  警告: 元のZIP内に '{old_name}' が見つかりませんでした。スキップします。")
 
