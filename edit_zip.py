@@ -302,6 +302,10 @@ def edit_zips_interactive(zip_paths):
                 with zipfile.ZipFile(z_path, 'r') as zf:
                     infolist = zf.infolist()
                     for info in infolist:
+                        # ディレクトリのみのエントリは表示・対象外とする
+                        if info.is_dir():
+                            continue
+
                         name = info.filename
                         original_mappings[z_path].append((name, name))
                         size_str = format_size(info.file_size)
