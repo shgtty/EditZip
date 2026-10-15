@@ -293,6 +293,7 @@ def edit_zips_interactive(zip_paths):
         writer.writerow(["# フォーマット: ZIPファイルパス, 元のファイルパス, 変更後のファイルパス, ファイルサイズ"])
         writer.writerow(["# 3列目(変更後のファイルパス)を書き換えるとリネームされます。"])
         writer.writerow(["# 行を削除するか先頭に '#' を付けると除外されます（設定ファイルのキーワードに該当するファイルは事前にコメントアウトされています）。"])
+        writer.writerow(["# 2列目(original_path)は変更しないでください（変更した場合は警告が表示され、元のファイルがそのまま保持されます）。"])
         writer.writerow(["# 編集完了後、保存してテキストエディタを閉じてください。"])
         writer.writerow([])
         writer.writerow(["zip_path", "original_path", "new_path", "file_size"])
@@ -371,11 +372,55 @@ def edit_zips_interactive(zip_paths):
     for z_path in valid_zip_paths:
         zip_filename = os.path.basename(z_path)
         orig_mapping = original_mappings.get(z_path, [])
-        mapping = parsed_mappings.get(z_path, [])
+        raw_mapping = parsed_mappings.get(z_path, [])
 
-        if not mapping:
+        if not raw_mapping:
             print(f"[{zip_filename}] 警告: エントリーがありません。スキップします。")
             continue
+
+        orig_entries = [name for name, _ in orig_mapping]
+        orig_set = set(orig_entries)
+
+        # 2列目 (old_name) の妥当性チェックと救済処理
+        valid_rows = []
+        invalid_rows = []
+        matched_orig = set()
+
+        for old_name, new_name in raw_mapping:
+            if old_name in orig_set:
+                valid_rows.append((old_name, new_name))
+                matched_orig.add(old_name)
+            else:
+                invalid_rows.append((old_name, new_name))
+
+        recovered_rows = []
+        if invalid_rows:
+            unmatched_orig = [e for e in orig_entries if e not in matched_orig]
+            for bad_old, new_name in invalid_rows:
+                target_orig = None
+                # 優先度1: 3列目 (new_name) が未マッチの元エントリに含まれていればそれを使用
+                if new_name in unmatched_orig:
+                    target_orig = new_name
+                    unmatched_orig.remove(target_orig)
+                # 優先度2: 残った未マッチの元エントリを出現順に割り当て
+                elif unmatched_orig:
+                    target_orig = unmatched_orig.pop(0)
+
+                if target_orig:
+                    print(f"[{zip_filename}] 警告: 2列目(original_path)の '{bad_old}' は元のZIP内に存在しません。元のファイル '{target_orig}' をそのまま保持します。")
+                    recovered_rows.append((target_orig, target_orig))
+                else:
+                    print(f"[{zip_filename}] 警告: 2列目(original_path)の '{bad_old}' は元のZIP内に存在せず、対応する元ファイルも特定できませんでした。スキップします。")
+
+        # 正常行と救済行を合わせ、元のエントリ順を維持して最終マッピングを作成
+        final_dict = {}
+        for old_name, new_name in valid_rows + recovered_rows:
+            final_dict[old_name] = new_name
+
+        mapping = []
+        for orig_name in orig_entries:
+            if orig_name in final_dict:
+                mapping.append((orig_name, final_dict[orig_name]))
 
         if mapping == orig_mapping:
             print(f"[{zip_filename}] 変更が見つかりませんでした。スキップします。")
