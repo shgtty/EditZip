@@ -4,7 +4,7 @@ import zipfile
 import tempfile
 import subprocess
 import csv
-import io
+import struct
 import json
 import copy
 from collections import defaultdict
@@ -87,32 +87,52 @@ def get_valid_zip_paths(zip_paths):
 
 
 def rebuild_zip_file(z_path, mapping):
-    """マッピングに従ってZIPファイルをメモリ上で再構築し、元ファイルをゴミ箱へ移動して更新します。"""
+    """マッピングに従って圧縮済みデータを直接コピーしてZIPファイルを再構築し、元ファイルをゴミ箱へ移動して更新します。"""
     zip_filename = os.path.basename(z_path)
-    print(f"[{zip_filename}] メモリ上で再構築しています...")
+    print(f"[{zip_filename}] 再圧縮なしで高速再構築しています...")
     temp_output_zip = f"{z_path}.tmp_{os.getpid()}.zip"
+    chunk_size = 1024 * 1024  # 1MB
 
     try:
-        mem_zip = io.BytesIO()
         with zipfile.ZipFile(z_path, 'r') as src_zf:
             src_entries = set(src_zf.namelist())
-            with zipfile.ZipFile(mem_zip, 'w', compression=zipfile.ZIP_DEFLATED) as dst_zf:
-                for old_name, new_name in tqdm(mapping, desc=f"[{zip_filename}] 圧縮中", unit="files"):
+            with zipfile.ZipFile(temp_output_zip, 'w', allowZip64=True) as dst_zf:
+                dst_zf.comment = src_zf.comment
+                for old_name, new_name in tqdm(mapping, desc=f"[{zip_filename}] コピー中", unit="files"):
                     # 空文字のエントリ（ディレクトリ階層削除時など）はスキップ
                     if not new_name or not new_name.strip('/'):
                         continue
                     if old_name in src_entries:
-                        data = src_zf.read(old_name)
                         src_info = src_zf.getinfo(old_name)
+
+                        # ローカルファイルヘッダ(30バイト)末尾のファイル名長・拡張フィールド長を読み取り、圧縮データ本体へシーク
+                        src_zf.fp.seek(src_info.header_offset + 26)
+                        fname_len, extra_len = struct.unpack('<HH', src_zf.fp.read(4))
+                        src_zf.fp.seek(src_info.header_offset + 30 + fname_len + extra_len)
+
                         new_info = copy.copy(src_info)
                         new_info.filename = new_name
-                        dst_zf.writestr(new_info, data)
+                        new_info.header_offset = dst_zf.fp.tell()
+                        # CRC・サイズは既知のため Data Descriptor フラグ(bit 3)を解除し、旧オフセット等を含む extra をリセット
+                        new_info.flag_bits &= ~0x08
+                        new_info.extra = b""
+
+                        dst_zf.fp.write(new_info.FileHeader())
+
+                        remaining = src_info.compress_size
+                        while remaining > 0:
+                            chunk = src_zf.fp.read(min(remaining, chunk_size))
+                            if not chunk:
+                                raise EOFError(f"'{old_name}' の圧縮データ読み込み中に予期せぬEOFに達しました。")
+                            dst_zf.fp.write(chunk)
+                            remaining -= len(chunk)
+
+                        dst_zf.start_dir = dst_zf.fp.tell()
+                        dst_zf.filelist.append(new_info)
+                        dst_zf.NameToInfo[new_info.filename] = new_info
+                        dst_zf._didModify = True
                     else:
                         tqdm.write(f"  警告: 元のZIP内に '{old_name}' が見つかりませんでした。スキップします。")
-
-        # 完成したメモリ上のZIPを一括でディスクへ書き出し
-        with open(temp_output_zip, 'wb') as f:
-            f.write(mem_zip.getvalue())
 
         send2trash(z_path)
         os.replace(temp_output_zip, z_path)
