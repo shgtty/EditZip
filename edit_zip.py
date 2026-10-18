@@ -89,6 +89,39 @@ def get_valid_zip_paths(zip_paths):
 def rebuild_zip_file(z_path, mapping):
     """マッピングに従って圧縮済みデータを直接コピーしてZIPファイルを再構築し、元ファイルをゴミ箱へ移動して更新します。"""
     zip_filename = os.path.basename(z_path)
+
+    # パス区切り文字の正規化と重複（衝突）チェック
+    normalized_mapping = []
+    seen_files = {}
+    seen_dirs = set()
+    collisions = []
+
+    for old_name, new_name in mapping:
+        norm_new = new_name.replace('\\', '/')
+        # 空文字のエントリ（ディレクトリ階層削除時など）はスキップ
+        if not norm_new or not norm_new.strip('/'):
+            continue
+
+        if norm_new.endswith('/'):
+            # ディレクトリエントリの重複（フォルダ統合時など）は1つにまとめる
+            if norm_new in seen_dirs:
+                continue
+            seen_dirs.add(norm_new)
+        else:
+            norm_new = norm_new.lstrip('/')
+            if norm_new in seen_files:
+                collisions.append((norm_new, seen_files[norm_new], old_name))
+            else:
+                seen_files[norm_new] = old_name
+
+        normalized_mapping.append((old_name, norm_new))
+
+    if collisions:
+        print(f"[{zip_filename}] エラー: リネーム後のファイルパスに重複（衝突）が検出されたため、更新を中止しました:")
+        for dup_path, first_src, second_src in collisions:
+            print(f"  - 重複先: '{dup_path}' (元ファイル: '{first_src}' と '{second_src}')")
+        return
+
     print(f"[{zip_filename}] 再圧縮なしで高速再構築しています...")
     temp_output_zip = f"{z_path}.tmp_{os.getpid()}.zip"
     chunk_size = 1024 * 1024  # 1MB
@@ -98,10 +131,7 @@ def rebuild_zip_file(z_path, mapping):
             src_entries = set(src_zf.namelist())
             with zipfile.ZipFile(temp_output_zip, 'w', allowZip64=True) as dst_zf:
                 dst_zf.comment = src_zf.comment
-                for old_name, new_name in tqdm(mapping, desc=f"[{zip_filename}] コピー中", unit="files"):
-                    # 空文字のエントリ（ディレクトリ階層削除時など）はスキップ
-                    if not new_name or not new_name.strip('/'):
-                        continue
+                for old_name, new_name in tqdm(normalized_mapping, desc=f"[{zip_filename}] コピー中", unit="files"):
                     if old_name in src_entries:
                         src_info = src_zf.getinfo(old_name)
 
@@ -236,12 +266,13 @@ def edit_zips_dir_mode(zip_paths):
             if len(row) < 2:
                 continue
 
-            old_dir = row[1].strip()
-            if not old_dir:
+            # フォルダ名前後のスペースを保持するため .strip() は行わない
+            old_dir = row[1]
+            if not old_dir.strip():
                 continue
 
             if len(row) >= 3:
-                new_dir = row[2].strip()
+                new_dir = row[2]
             else:
                 new_dir = old_dir
 
@@ -255,12 +286,16 @@ def edit_zips_dir_mode(zip_paths):
         zip_filename = os.path.basename(z_path)
         src_entries = zip_entries_map.get(z_path, [])
         dir_rules = parsed_dir_rules.get(z_path, [])
+        valid_dirs = set(extract_directories(src_entries))
 
         # 変更されたルール (old_dir != new_dir) のみを抽出
         changed_rules = []
         for old_d, new_d in dir_rules:
-            clean_old = old_d.strip().strip('/')
-            clean_new = new_d.strip().strip('/')
+            clean_old = old_d.replace('\\', '/').strip('/')
+            if clean_old not in valid_dirs and clean_old.strip() in valid_dirs:
+                clean_old = clean_old.strip()
+
+            clean_new = new_d.replace('\\', '/').strip('/') if new_d.strip() else ""
 
             if not clean_old:
                 continue
@@ -373,12 +408,13 @@ def edit_zips_interactive(zip_paths):
             if len(row) < 2:
                 continue
 
-            old_name = row[1].strip()
-            if not old_name:
+            # ファイル名・パス前後のスペースを保持するため .strip() は行わない
+            old_name = row[1]
+            if not old_name.strip():
                 continue
 
-            if len(row) >= 3:
-                new_name = row[2].strip() or old_name
+            if len(row) >= 3 and row[2].strip():
+                new_name = row[2].replace('\\', '/').lstrip('/')
             else:
                 new_name = old_name
 
@@ -410,6 +446,11 @@ def edit_zips_interactive(zip_paths):
             if old_name in orig_set:
                 valid_rows.append((old_name, new_name))
                 matched_orig.add(old_name)
+            elif old_name.strip() in orig_set:
+                # エディタ等で2列目の前後に余分な空白が入った場合のフォールバック
+                clean_old = old_name.strip()
+                valid_rows.append((clean_old, new_name))
+                matched_orig.add(clean_old)
             else:
                 invalid_rows.append((old_name, new_name))
 
@@ -421,6 +462,9 @@ def edit_zips_interactive(zip_paths):
                 # 優先度1: 3列目 (new_name) が未マッチの元エントリに含まれていればそれを使用
                 if new_name in unmatched_orig:
                     target_orig = new_name
+                    unmatched_orig.remove(target_orig)
+                elif new_name.strip() in unmatched_orig:
+                    target_orig = new_name.strip()
                     unmatched_orig.remove(target_orig)
                 # 優先度2: 残った未マッチの元エントリを出現順に割り当て
                 elif unmatched_orig:
