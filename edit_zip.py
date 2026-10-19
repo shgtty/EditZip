@@ -86,6 +86,14 @@ def get_valid_zip_paths(zip_paths):
     return valid
 
 
+def open_zip_for_read(z_path):
+    """古いWindows製ZIPの日本語文字化け(CP932)に対応して読み込みモードで開きます。"""
+    try:
+        return zipfile.ZipFile(z_path, 'r', metadata_encoding='cp932')
+    except UnicodeDecodeError:
+        return zipfile.ZipFile(z_path, 'r')
+
+
 def rebuild_zip_file(z_path, mapping):
     """マッピングに従って圧縮済みデータを直接コピーしてZIPファイルを再構築し、元ファイルをゴミ箱へ移動して更新します。"""
     zip_filename = os.path.basename(z_path)
@@ -127,7 +135,7 @@ def rebuild_zip_file(z_path, mapping):
     chunk_size = 1024 * 1024  # 1MB
 
     try:
-        with zipfile.ZipFile(z_path, 'r') as src_zf:
+        with open_zip_for_read(z_path) as src_zf:
             src_entries = set(src_zf.namelist())
             with zipfile.ZipFile(temp_output_zip, 'w', allowZip64=True) as dst_zf:
                 dst_zf.comment = src_zf.comment
@@ -222,7 +230,7 @@ def edit_zips_dir_mode(zip_paths):
 
         for z_path in valid_zip_paths:
             try:
-                with zipfile.ZipFile(z_path, 'r') as zf:
+                with open_zip_for_read(z_path) as zf:
                     namelist = [info.filename for info in zf.infolist()]
                     zip_entries_map[z_path] = namelist
                     dir_list = extract_directories(namelist)
@@ -355,7 +363,7 @@ def edit_zips_interactive(zip_paths):
 
         for z_path in valid_zip_paths:
             try:
-                with zipfile.ZipFile(z_path, 'r') as zf:
+                with open_zip_for_read(z_path) as zf:
                     infolist = zf.infolist()
                     for info in infolist:
                         # ディレクトリのみのエントリは表示・対象外とする
