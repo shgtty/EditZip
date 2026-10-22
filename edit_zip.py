@@ -135,6 +135,7 @@ def rebuild_zip_file(z_path, mapping):
     chunk_size = 1024 * 1024  # 1MB
 
     try:
+        src_file_size = os.path.getsize(z_path)
         with open_zip_for_read(z_path) as src_zf:
             src_entries = set(src_zf.namelist())
             with zipfile.ZipFile(temp_output_zip, 'w', allowZip64=True) as dst_zf:
@@ -143,10 +144,23 @@ def rebuild_zip_file(z_path, mapping):
                     if old_name in src_entries:
                         src_info = src_zf.getinfo(old_name)
 
-                        # ローカルファイルヘッダ(30バイト)末尾のファイル名長・拡張フィールド長を読み取り、圧縮データ本体へシーク
-                        src_zf.fp.seek(src_info.header_offset + 26)
-                        fname_len, extra_len = struct.unpack('<HH', src_zf.fp.read(4))
-                        src_zf.fp.seek(src_info.header_offset + 30 + fname_len + extra_len)
+                        if src_info.header_offset < 0 or src_info.compress_size < 0:
+                            raise zipfile.BadZipFile(f"'{old_name}' のヘッダオフセットまたは圧縮サイズが不正です。")
+                        if src_info.header_offset + 30 > src_file_size:
+                            raise zipfile.BadZipFile(f"'{old_name}' のローカルファイルヘッダ位置がファイルサイズを超えています。")
+
+                        # ローカルファイルヘッダ(30バイト)を読み取り、シグネチャとサイズ境界を検証して圧縮データ本体へシーク
+                        src_zf.fp.seek(src_info.header_offset)
+                        local_header = src_zf.fp.read(30)
+                        if len(local_header) != 30 or local_header[:4] != zipfile.stringFileHeader:
+                            raise zipfile.BadZipFile(f"'{old_name}' のローカルファイルヘッダシグネチャが不正または破損しています。")
+
+                        fname_len, extra_len = struct.unpack('<HH', local_header[26:30])
+                        data_offset = src_info.header_offset + 30 + fname_len + extra_len
+                        if data_offset + src_info.compress_size > src_file_size:
+                            raise zipfile.BadZipFile(f"'{old_name}' の圧縮データ範囲がZIPファイルサイズを超えています。")
+
+                        src_zf.fp.seek(data_offset)
 
                         new_info = copy.copy(src_info)
                         new_info.filename = new_name
